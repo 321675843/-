@@ -1,0 +1,150 @@
+clc; 
+clear
+close all;
+close all hidden;
+users=10; %number of users in scheduling
+load= [42 34 46 48 59 52 64 47 45 50]; %demand/load for each user456
+%fprintf('THE LOAD REQUEST IS %d %d %d %d %d %d %d %d %d %d\n',load);
+providers=3; %number of electrical providers
+capacity=[150 200 50];% capacity for electrical providers
+%fprintf('THE CAPACITY of PROVIDERS IS %d %d %d\n',load);
+
+count=0;       %to check if decision is repeated by all users
+loop=200000; %total iterations 
+ 
+track=zeros(1,loop);%track the convergence of the first user.
+    
+  
+decision = ones(1,users); % whether a user will turn on or not. It does not indicate which provider it selects. Just on or off
+oldDecision = zeros(1,users); %whether a user will turn on or not in the previous iteration
+oldloadReqd=0;% the total on loads in previous iteration  
+ 
+iteration=1;% number of iterations
+  a0=ones(providers,users); b0=ones(providers,users); %hyper parameters for action 0, i.e., do not turn on an action, a0 will follow reward, b0 will follow penalty
+  a1=ones(providers,users); b1=ones(providers,users); %hyper parameters for action 1, i.e., do turn on an action, a1 will follow reward, b1 will follow penalty
+oldProviderselection_off=zeros(1,users);%this array saves the provider for a particular user if the user's decision is off in the previous iteration, value 0 means the decision is on
+oldProviderselection_on=zeros(1,users);%this array saves the provider for a particular user if the user's decision is on in the previous iteration, value 0 means the decision is off
+       
+ 
+ while (iteration<=loop)   %start iteration
+   newloadReqd=0;% register how much load in total that are marked as on for this iteration
+   Providerselection_on=zeros(1,users); % this array saves the providers for users if the decision is 1 (on). Value 0 means the decision is off
+   Providerselection_off=zeros(1,users); % this array saves the providers for users if the decision is 0 (off).  Value 0 means the decision is on
+   
+  %Step 1: The following steps are used to select an action for this round of iteration 
+  for i=(1:users)
+      for j=1: providers     %draw random values from beta distributions among all providers for a particular user
+       X0(j,i)=betarnd(a0(j,i),b0(j,i)); 
+       X1(j,i)=betarnd(a1(j,i),b1(j,i));
+      end
+      
+     if(max(X0(:,i))>max(X1(:,i))) 
+         decision(1,i)=0; % user i will not turn on
+     else
+         decision(1,i)=1; % user i will turn on
+     end
+     % here we find out which provider it selects, no matter it is on or
+     % off
+     if decision(1,i)==1 
+       [Providerselection_on(i) Temp1 ]=find(max(X1(:,i))==X1(:,i));
+     end
+     if decision(1,i)==0
+       [Providerselection_off(i) Temp1 ]=find(max(X0(:,i))==X0(:,i));
+     end
+  end
+  newloadReqd=sum(decision.*load); % add up all "on" loads
+  
+  
+ %%%%%%%%%%   
+ %Step 2: calculate the sum of load for each provider
+ sum_load_providers=zeros(1,providers);
+ for j=1:providers
+     for i=1:users
+        if Providerselection_on(i)==j
+        sum_load_providers(j)=sum_load_providers(j)+load(i);
+        end         
+     end
+     
+ end
+ 
+ 
+ 
+%Step 3: find reward/penalty and update the hyperparameters
+ 
+     
+     for i=1:users
+      if max(X0(:,i))>max(X1(:,i)) %turn off
+          flag=0;
+          if (newloadReqd>=oldloadReqd) %newload is not less than previous load
+            for j=1: providers    
+             if(sum_load_providers(j)<=capacity(j)) % check if the sum of loads for each provider is below the limit
+                flag=flag+1;
+             end
+            end
+              if flag==providers %the sum of loads for each provider is below its limit for all providers, then a reward is given to all users
+               a0(Providerselection_off(i),i)=a0(Providerselection_off(i),i)+1;
+              end
+          else %penalty
+               b0(Providerselection_off(i),i)=b0(Providerselection_off(i),i)+1;
+          end
+      
+      else %turn on
+          flag=0;
+        if(newloadReqd>=oldloadReqd) 
+           for j=1: providers    
+               if(sum_load_providers(j)<=capacity(j))
+                flag=flag+1;
+               end
+           end
+           if flag==providers %the sum of load for each provider is below the limit for all providers,   reward 
+               a1(Providerselection_on(i),i)=a1(Providerselection_on(i),i)+1;
+           end
+       else %penalty
+              b1(Providerselection_on(i),i)=b1(Providerselection_on(i),i)+1;
+       end
+        
+      end
+     end 
+    
+    
+%Step 4     check if decision is being repeated 
+   if(decision==oldDecision) %Just check on or off, and ignore which provider it utilizes
+    if oldProviderselection_off==Providerselection_off %here check all uers with off decisions
+     if oldProviderselection_on==Providerselection_on  %here check all uers with on decisions
+         count=count+1;
+     else
+         count=0;
+     end
+     
+    end
+   end
+   
+   oldDecision=decision; % present decision is old decision for next iteration
+   oldProviderselection_off=Providerselection_off;
+   oldProviderselection_on=Providerselection_on;
+   
+   if (count>100) % convergence if same decision occurs 40 times consequtively
+          fprintf('communication to be stopped due to repeated answer from users \n');
+          fprintf('repeated decision = %d %d %d %d %d %d %d %d %d %d\n', decision);
+       break;
+   end 
+   
+   if (newloadReqd>=oldloadReqd)
+        flag=0;
+        for j=1: providers    
+             if(sum_load_providers(j)<=capacity(j))
+                flag=flag+1;
+             end
+        end
+        if flag==providers 
+               oldloadReqd=newloadReqd; %update the sum of loads for the next iteration
+               bestDecision=decision;   %update the best decision
+        end
+   end 
+   track(iteration)=Providerselection_on(1); %track the decision for the first user, just for observation purpose
+   iteration=iteration+1;
+ 
+end
+   oldloadReqd
+   bestDecision
+   plot(track(iteration-300:iteration));
